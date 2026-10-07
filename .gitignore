@@ -12,6 +12,9 @@ node_modules
 # Logs
 logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Misc
 .DS_Store
@@ -25,3 +28,11 @@ logs
 
 # Firebase service account keys
 service-account.json
+
+# Firebase local tooling
+.firebaserc
+firebase-debug.log
+firebase-debug.*.log
+firebase-*.zip
+.firebase/
+emulator-ui/
