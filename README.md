@@ -1,75 +1,24 @@
-# Nuxt Minimal Starter
+# gather
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+Local Nuxt app you can connect to Firebase.
 
-## Setup
-
-Make sure to install dependencies:
+## Run locally
 
 ```bash
-# npm
 npm install
-
-# pnpm
-pnpm install
-
-# yarn
-yarn install
-
-# bun
-bun install
-```
-
-## Development Server
-
-Start the development server on `http://localhost:3000`:
-
-```bash
-# npm
 npm run dev
-
-# pnpm
-pnpm dev
-
-# yarn
-yarn dev
-
-# bun
-bun run dev
 ```
 
-## Production
+Open http://localhost:3000. The app starts without Firebase credentials.
 
-Build the application for production:
+## Connect Firebase
 
-```bash
-# npm
-npm run build
+1. In the [Firebase console](https://console.firebase.google.com/), open **Project settings → General → Your apps** and copy the web app config.
+2. Copy `.env.example` to `.env` and fill in the values.
+3. Restart `npm run dev`.
 
-# pnpm
-pnpm build
+[VueFire](https://vuefire.vuejs.org/nuxt/getting-started.html) is included. After the config is set, `useFirebaseApp()` is available, along with the Firestore, Realtime Database, and Storage composables.
 
-# yarn
-yarn build
+If the Firebase emulator suite is running on this machine, VueFire connects to it automatically.
 
-# bun
-bun run build
-```
-
-Locally preview production build:
-
-```bash
-# npm
-npm run preview
-
-# pnpm
-pnpm preview
-
-# yarn
-yarn preview
-
-# bun
-bun run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+Auth is off so the app can run locally without a service account. To turn it on, install `firebase-admin`, set `vuefire.auth.enabled` to `true` in `nuxt.config.ts`, and point `GOOGLE_APPLICATION_CREDENTIALS` at a service account JSON file (see `.env.example`). Do not commit `.env` or `service-account.json`.
