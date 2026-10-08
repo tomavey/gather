@@ -85,6 +85,13 @@ textarea { min-height: 84px; resize: vertical; }
   color: inherit;
 }
 .event-link { display: block; }
+.today {
+  margin: 36px 0 20px;
+  font-family: Fraunces, Georgia, serif;
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 520;
+  letter-spacing: -0.03em;
+}
 .kicker {
   letter-spacing: 0.14em;
   text-transform: uppercase;

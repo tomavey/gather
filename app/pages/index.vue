@@ -5,6 +5,8 @@
       <p v-if="session" class="muted">{{ session.name }} · this browser remembers you</p>
     </header>
 
+    <p class="today">{{ today }}</p>
+
     <p v-if="!ready">Opening your hub…</p>
     <p v-else-if="error" class="error">{{ error }}</p>
 
@@ -64,6 +66,12 @@
 <script setup>
 const hub = useHub();
 const { session, ready, error, mode, enterAsOrganizer, createEvent, myEvents, peopleFor, formatDay } = hub;
+const today = new Date().toLocaleDateString(undefined, {
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
 const name = ref("");
 const email = ref("");
 const showForm = ref(false);
