@@ -81,24 +81,33 @@ export function useHub() {
     return entry;
   }
 
-  async function put(collection, record) {
-    const list = state.value[collection];
+  async function ensureSignedIn() {
+    if (mode.value !== "firebase" || !services.value) return;
+    if (services.value.auth.currentUser) return;
+    const { signInAnonymously } = await import("firebase/auth");
+    await signInAnonymously(services.value.auth);
+  }
+
+  async function put(collectionName, record) {
+    const list = state.value[collectionName];
     const index = list.findIndex((item) => item.id === record.id);
     if (index === -1) list.push(record);
     else list[index] = record;
     if (mode.value === "firebase" && services.value) {
+      await ensureSignedIn();
       const { doc, setDoc } = await import("firebase/firestore");
-      await setDoc(doc(services.value.db, collection, record.id), record);
+      await setDoc(doc(services.value.db, collectionName, record.id), record);
     } else {
       writeLocal();
     }
   }
 
-  async function remove(collection, id) {
-    state.value[collection] = state.value[collection].filter((item) => item.id !== id);
+  async function remove(collectionName, id) {
+    state.value[collectionName] = state.value[collectionName].filter((item) => item.id !== id);
     if (mode.value === "firebase" && services.value) {
+      await ensureSignedIn();
       const { doc, deleteDoc } = await import("firebase/firestore");
-      await deleteDoc(doc(services.value.db, collection, id));
+      await deleteDoc(doc(services.value.db, collectionName, id));
     } else {
       writeLocal();
     }
@@ -142,31 +151,40 @@ export function useHub() {
     const storage = getStorage(app);
     services.value = { auth, db, storage };
     mode.value = "firebase";
-    for (const name of ["events", "people", "items", "updates", "invites"]) {
-      onSnapshot(
-        collection(db, name),
-        (snap) => {
-          state.value[name] = snap.docs.map((entry) => entry.data());
-          if (name === "updates") {
-            state.value.updates.sort((a, b) => b.createdAt - a.createdAt);
-          }
-          ready.value = true;
-        },
-        () => {
-          ready.value = true;
-        },
-      );
+    let listening = false;
+    function listen() {
+      if (listening) return;
+      listening = true;
+      for (const name of ["events", "people", "items", "updates", "invites"]) {
+        onSnapshot(
+          collection(db, name),
+          (snap) => {
+            state.value[name] = snap.docs.map((entry) => entry.data());
+            if (name === "updates") {
+              state.value.updates.sort((a, b) => b.createdAt - a.createdAt);
+            }
+            ready.value = true;
+          },
+          (cause) => {
+            error.value = cause.message || "Could not read the hub from Firebase.";
+            ready.value = true;
+          },
+        );
+      }
     }
     onAuthStateChanged(auth, (user) => {
-      if (!user?.email) return;
-      const current = readSession();
-      if (!current || current.email !== user.email) {
-        writeSession({
-          name: current?.name || user.email.split("@")[0],
-          email: user.email,
-          kind: current?.kind || "guest",
-        });
+      if (user?.email) {
+        const current = readSession();
+        if (!current || current.email !== user.email) {
+          writeSession({
+            name: current?.name || user.email.split("@")[0],
+            email: user.email,
+            kind: current?.kind || "guest",
+          });
+        }
       }
+      if (user) listen();
+      else ready.value = true;
     });
   }
 
@@ -220,6 +238,7 @@ export function useHub() {
 
   async function enterAsOrganizer(name, email) {
     writeSession({ name: name.trim(), email: email.trim().toLowerCase(), kind: "organizer" });
+    if (mode.value === "firebase") await ensureSignedIn();
   }
 
   async function createEvent(input) {
@@ -250,9 +269,16 @@ export function useHub() {
     const entry = logChange(event.id, `${session.value.name} opened ${event.name}.`);
     if (mode.value === "local") writeLocal();
     else {
-      await put("events", event);
-      await put("people", person);
-      await put("updates", entry);
+      try {
+        await put("events", event);
+        await put("people", person);
+        await put("updates", entry);
+      } catch (cause) {
+        state.value.events = state.value.events.filter((item) => item.id !== event.id);
+        state.value.people = state.value.people.filter((item) => item.id !== person.id);
+        state.value.updates = state.value.updates.filter((item) => item.id !== entry.id);
+        throw cause;
+      }
     }
     return event;
   }
@@ -279,6 +305,52 @@ export function useHub() {
     if (mode.value === "firebase") await put("updates", entry);
   }
 
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  function queueInviteEmail(message) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        await ensureSignedIn();
+        const { collection, addDoc, onSnapshot } = await import("firebase/firestore");
+        const ref = await addDoc(collection(services.value.db, "emails"), {
+          ...message,
+          createdBy: services.value.auth.currentUser.uid,
+        });
+        const timer = setTimeout(() => {
+          stop();
+          resolve("queued");
+        }, 20000);
+        const stop = onSnapshot(
+          ref,
+          (snap) => {
+            const data = snap.data() || {};
+            if (data.status === "sent" || data.sent === true) {
+              clearTimeout(timer);
+              stop();
+              resolve(true);
+            } else if (data.status === "failed") {
+              clearTimeout(timer);
+              stop();
+              reject(new Error(data.error || "Could not send the invitation email. The invite link still works."));
+            }
+          },
+          (cause) => {
+            clearTimeout(timer);
+            reject(cause);
+          },
+        );
+      } catch (cause) {
+        reject(cause);
+      }
+    });
+  }
+
   async function invite(event, email) {
     const clean = email.trim().toLowerCase();
     const existing = state.value.invites.find(
@@ -294,20 +366,42 @@ export function useHub() {
     await put("invites", invite);
     const entry = logChange(event.id, `${session.value.name} invited ${clean}.`);
     if (mode.value === "firebase") await put("updates", entry);
-    if (mode.value === "firebase" && services.value) {
-      try {
-        const { sendSignInLinkToEmail } = await import("firebase/auth");
-        const url = `${location.origin}/join/${invite.token}`;
-        await sendSignInLinkToEmail(services.value.auth, clean, {
-          url,
-          handleCodeInApp: true,
+    const inviteUrl = `${location.origin}/join/${invite.token}`;
+    localStorage.setItem("gathered-hub-email", clean);
+    const who = session.value?.name || "Someone";
+    const subject = `You're invited to ${event.name}`;
+    const text = `${who} invited you to ${event.name}.\n\nOpen the gathering:\n${inviteUrl}\n`;
+    const html = `<p>${escapeHtml(who)} invited you to <strong>${escapeHtml(event.name)}</strong>.</p><p><a href="${escapeHtml(inviteUrl)}">Open the gathering</a></p>`;
+    let emailed = false;
+    let mailError = "";
+    try {
+      if (mode.value === "firebase" && services.value) {
+        emailed = await queueInviteEmail({
+          to: clean,
+          subject,
+          text,
+          html,
+          inviteId: invite.id,
         });
-        localStorage.setItem("gathered-hub-email", clean);
-      } catch (cause) {
-        error.value = cause.message || "Firebase could not send the email. The invite link still works.";
+      } else {
+        await $fetch("/api/invite", {
+          method: "POST",
+          body: {
+            email: clean,
+            eventName: event.name,
+            inviteUrl,
+            hostName: who,
+          },
+        });
+        emailed = true;
       }
+    } catch (cause) {
+      mailError = cause?.data?.message
+        || cause?.statusMessage
+        || cause?.message
+        || "Could not send the invitation email. The invite link still works.";
     }
-    return invite;
+    return { record: invite, emailed, mailError };
   }
 
   async function acceptInvite(token, name) {
@@ -350,6 +444,7 @@ export function useHub() {
   async function saveCover(event, file) {
     let coverUrl = "";
     if (mode.value === "firebase" && services.value) {
+      await ensureSignedIn();
       const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
       const stored = ref(services.value.storage, `events/${event.id}/cover-${uid()}`);
       await uploadBytes(stored, file);

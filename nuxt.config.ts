@@ -33,6 +33,11 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
+    smtpHost: '',
+    smtpPort: '587',
+    smtpUser: '',
+    smtpPass: '',
+    mailFrom: '',
     public: {
       firebaseApiKey: '',
       firebaseAuthDomain: '',

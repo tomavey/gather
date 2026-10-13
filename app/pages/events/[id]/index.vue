@@ -83,10 +83,11 @@
       <form v-else class="card form" style="padding: 18px" @submit.prevent="sendInvite">
         <h2>Invite by email</h2>
         <label>Email <input v-model="inviteEmail" type="email" required placeholder="guest@example.com" /></label>
-        <button class="btn terra" type="submit">Create invite</button>
-        <p v-if="inviteLink">Send this link. They enter once, then this browser remembers them.</p>
+        <button class="btn terra" type="submit" :disabled="sendingInvite">
+          {{ sendingInvite ? "Sending…" : "Send invite" }}
+        </button>
+        <p v-if="inviteStatus" :class="inviteFailed ? 'error' : 'muted'">{{ inviteStatus }}</p>
         <p v-if="inviteLink"><a :href="inviteLink">{{ inviteLink }}</a></p>
-        <p v-if="inviteLink"><a :href="mailto">Email it</a></p>
       </form>
     </section>
   </main>
@@ -103,6 +104,9 @@ const {
 const tab = ref("people");
 const inviteEmail = ref("");
 const inviteLink = ref("");
+const inviteStatus = ref("");
+const inviteFailed = ref(false);
+const sendingInvite = ref(false);
 const drafts = reactive({});
 
 const event = computed(() => eventById(route.params.id));
@@ -110,13 +114,6 @@ const people = computed(() => (event.value ? peopleFor(event.value.id) : []));
 const updates = computed(() => (event.value ? updatesFor(event.value.id) : []));
 const organizer = computed(() => isOrganizer(event.value));
 const days = computed(() => (event.value ? eachDay(event.value.start, event.value.end) : []));
-const mailto = computed(() => {
-  if (!inviteLink.value || !event.value) return "";
-  const subject = encodeURIComponent(`You’re invited to ${event.value.name}`);
-  const body = encodeURIComponent(`Come see the plans: ${inviteLink.value}`);
-  return `mailto:${inviteEmail.value}?subject=${subject}&body=${body}`;
-});
-
 watch(days, (list) => {
   for (const day of list) {
     if (!drafts[day]) drafts[day] = { title: "", time: "16:00", place: "" };
@@ -161,8 +158,24 @@ async function addItem(day) {
 }
 
 async function sendInvite() {
-  const record = await invite(event.value, inviteEmail.value);
-  inviteLink.value = `${location.origin}/join/${record.token}`;
+  sendingInvite.value = true;
+  inviteStatus.value = "";
+  inviteFailed.value = false;
+  try {
+    const result = await invite(event.value, inviteEmail.value);
+    inviteLink.value = `${location.origin}/join/${result.record.token}`;
+    inviteFailed.value = result.emailed === false;
+    inviteStatus.value = result.emailed === true
+      ? `Invitation sent to ${inviteEmail.value}.`
+      : result.emailed === "queued"
+        ? "Invite saved. The email is queued and will send once the mail function confirms it."
+        : result.mailError;
+  } catch (cause) {
+    inviteFailed.value = true;
+    inviteStatus.value = cause.message || "Could not create the invite.";
+  } finally {
+    sendingInvite.value = false;
+  }
 }
 
 async function onCover(change) {

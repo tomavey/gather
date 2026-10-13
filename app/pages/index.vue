@@ -78,9 +78,13 @@ const showForm = ref(false);
 const formError = ref("");
 const draft = reactive({ name: "", place: "", start: "", end: "", notes: "" });
 
-function start() {
-  enterAsOrganizer(name.value, email.value);
-  showForm.value = true;
+async function start() {
+  try {
+    await enterAsOrganizer(name.value, email.value);
+    showForm.value = true;
+  } catch (cause) {
+    error.value = cause.message || "Could not sign in to Firebase.";
+  }
 }
 
 function comingCount(eventId) {
@@ -93,7 +97,11 @@ async function onCreate() {
     formError.value = "The last day has to be on or after the first day.";
     return;
   }
-  const event = await createEvent(draft);
-  await navigateTo(`/events/${event.id}`);
+  try {
+    const event = await createEvent(draft);
+    await navigateTo(`/events/${event.id}`);
+  } catch (cause) {
+    formError.value = cause.message || "Could not save this gathering to Firebase.";
+  }
 }
 </script>
