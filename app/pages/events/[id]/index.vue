@@ -36,17 +36,27 @@
             </div>
             <div class="row">
               <label class="grow">Coming?
-                <select v-model="person.status" :disabled="!canEdit(person)">
+                <select v-model="person.status" :disabled="!canEdit(person)" @input="markStayDirty(person)">
                   <option value="coming">Coming</option>
                   <option value="maybe">Maybe</option>
                   <option value="out">Can’t</option>
                 </select>
               </label>
-              <label class="grow">Arrive <input v-model="person.arrival" type="date" :min="event.start" :max="event.end" :disabled="!canEdit(person)" /></label>
-              <label class="grow">Leave <input v-model="person.departure" type="date" :min="event.start" :max="event.end" :disabled="!canEdit(person)" /></label>
+              <label class="grow">Arrive <input v-model="person.arrival" type="date" :min="event.start" :max="event.end" :disabled="!canEdit(person)" @input="markStayDirty(person)" /></label>
+              <label class="grow">Leave <input v-model="person.departure" type="date" :min="event.start" :max="event.end" :disabled="!canEdit(person)" @input="markStayDirty(person)" /></label>
             </div>
-            <label>Where they’re staying <input v-model="person.lodging" :disabled="!canEdit(person)" placeholder="Blue cottage, inn, or a friend’s house" /></label>
-            <button v-if="canEdit(person)" class="btn" type="submit">Save</button>
+            <label>Where they’re staying <input v-model="person.lodging" :disabled="!canEdit(person)" placeholder="Blue cottage, inn, or a friend’s house" @input="markStayDirty(person)" /></label>
+            <button
+              v-if="canEdit(person)"
+              class="btn"
+              :class="{ saved: staySaved(person), saving: staySaving(person) }"
+              type="submit"
+              :disabled="staySaving(person)"
+              :aria-label="staySaving(person) ? 'Saving' : undefined"
+            >
+              <span v-if="staySaving(person)" class="spinner" aria-hidden="true"></span>
+              <template v-else>{{ staySaved(person) ? "Updated" : "Save" }}</template>
+            </button>
           </form>
         </article>
       </div>
@@ -108,6 +118,8 @@ const inviteStatus = ref("");
 const inviteFailed = ref(false);
 const sendingInvite = ref(false);
 const drafts = reactive({});
+const savedStays = reactive({});
+const savingStays = reactive({});
 
 const event = computed(() => eventById(route.params.id));
 const people = computed(() => (event.value ? peopleFor(event.value.id) : []));
@@ -136,8 +148,27 @@ function when(stamp) {
   });
 }
 
+function staySaved(person) {
+  return savedStays[person.id] === true;
+}
+
+function staySaving(person) {
+  return savingStays[person.id] === true;
+}
+
+function markStayDirty(person) {
+  savedStays[person.id] = false;
+}
+
 async function saveStay(person) {
-  await savePerson(person, `${person.name} updated arrival, departure, or where they are staying.`);
+  if (savingStays[person.id]) return;
+  savingStays[person.id] = true;
+  try {
+    await savePerson(person, `${person.name} updated arrival, departure, or where they are staying.`);
+    savedStays[person.id] = true;
+  } finally {
+    savingStays[person.id] = false;
+  }
 }
 
 async function addItem(day) {
