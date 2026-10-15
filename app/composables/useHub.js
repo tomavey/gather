@@ -2,7 +2,7 @@ const SESSION_KEY = "gathered-hub-session";
 const LOCAL_KEY = "gathered-hub-db";
 
 function emptyState() {
-  return { events: [], people: [], items: [], updates: [], invites: [] };
+  return { events: [], people: [], items: [], updates: [], invites: [], profiles: [] };
 }
 
 function uid() {
@@ -155,7 +155,7 @@ export function useHub() {
     function listen() {
       if (listening) return;
       listening = true;
-      for (const name of ["events", "people", "items", "updates", "invites"]) {
+      for (const name of ["events", "people", "items", "updates", "invites", "profiles"]) {
         onSnapshot(
           collection(db, name),
           (snap) => {
@@ -172,20 +172,94 @@ export function useHub() {
         );
       }
     }
-    onAuthStateChanged(auth, (user) => {
+    onAuthStateChanged(auth, async (user) => {
       if (user?.email) {
+        const profile = await loadProfile(user).catch(() => null);
         const current = readSession();
-        if (!current || current.email !== user.email) {
+        const admin = configuredAdmin();
+        const signedInEmail = user.email.toLowerCase();
+        if (profile) {
+          writeSession(admin && profile.email === admin ? { ...profile, kind: "superadmin" } : profile);
+        } else if (!current || current.email.toLowerCase() !== signedInEmail) {
           writeSession({
-            name: current?.name || user.email.split("@")[0],
-            email: user.email,
-            kind: current?.kind || "guest",
+            name: current?.name || signedInEmail.split("@")[0],
+            email: signedInEmail,
+            kind: admin && signedInEmail === admin ? "superadmin" : (current?.kind || "guest"),
           });
+        } else if (admin && signedInEmail === admin && current.kind === "superadmin") {
+          writeSession({ ...current, kind: "superadmin", email: signedInEmail });
         }
       }
       if (user) listen();
       else ready.value = true;
     });
+  }
+
+  async function loadProfile(user) {
+    const { doc, getDoc } = await import("firebase/firestore");
+    const snap = await getDoc(doc(services.value.db, "profiles", user.uid));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return {
+      name: data.name,
+      email: String(data.email || user.email || "").toLowerCase(),
+      kind: data.kind || "guest",
+      phone: data.phone || "",
+    };
+  }
+
+  async function saveProfile(profile) {
+    writeSession(profile);
+    const user = services.value?.auth?.currentUser;
+    if (mode.value !== "firebase" || !user) return;
+    const { doc, setDoc } = await import("firebase/firestore");
+    await setDoc(doc(services.value.db, "profiles", user.uid), {
+      id: user.uid,
+      uid: user.uid,
+      name: profile.name,
+      email: profile.email,
+      kind: profile.kind,
+      phone: profile.phone || "",
+    });
+  }
+
+  async function ensureGuestAccount(email, password) {
+    if (mode.value !== "firebase" || !services.value) return;
+    const current = services.value.auth.currentUser;
+    if (current?.email && current.email.toLowerCase() === email) return;
+    const { createUserWithEmailAndPassword, signInWithEmailAndPassword } = await import("firebase/auth");
+    try {
+      await createUserWithEmailAndPassword(services.value.auth, email, password);
+    } catch (cause) {
+      if (cause?.code !== "auth/email-already-in-use") {
+        if (cause?.code === "auth/weak-password") {
+          throw new Error("Use a password with at least 6 characters.");
+        }
+        throw new Error(cause?.message || "Could not create the account.");
+      }
+      try {
+        await signInWithEmailAndPassword(services.value.auth, email, password);
+      } catch {
+        throw new Error("This email already has an account. Use the password you chose before.");
+      }
+    }
+  }
+
+  async function signIn(email, password) {
+    if (mode.value !== "firebase" || !services.value) {
+      throw new Error("Sign-in needs the shared hub.");
+    }
+    const clean = email.trim().toLowerCase();
+    const { signInWithEmailAndPassword } = await import("firebase/auth");
+    let cred;
+    try {
+      cred = await signInWithEmailAndPassword(services.value.auth, clean, password);
+    } catch {
+      throw new Error("That email and password did not match an account.");
+    }
+    const profile = await loadProfile(cred.user);
+    if (profile) writeSession(profile);
+    else writeSession({ name: clean.split("@")[0], email: clean, kind: "guest" });
   }
 
   function ensure() {
@@ -232,8 +306,108 @@ export function useHub() {
     return state.value.updates.filter((entry) => entry.eventId === eventId);
   }
 
+  function configuredAdmin() {
+    return String(config.public.superadminEmail || "").trim().toLowerCase();
+  }
+
+  function isSuperadmin() {
+    const email = configuredAdmin();
+    return !!email
+      && session.value?.kind === "superadmin"
+      && session.value.email?.toLowerCase() === email;
+  }
+
   function isOrganizer(event) {
-    return !!event && session.value?.email?.toLowerCase() === event.organizerEmail.toLowerCase();
+    if (!event) return false;
+    if (isSuperadmin()) return true;
+    return session.value?.email?.toLowerCase() === event.organizerEmail.toLowerCase();
+  }
+
+  function allEvents() {
+    return [...state.value.events].sort((a, b) => a.start.localeCompare(b.start));
+  }
+
+  function allUsers() {
+    const byEmail = new Map();
+    for (const person of state.value.people) {
+      const email = String(person.email || "").toLowerCase();
+      if (!email) continue;
+      const current = byEmail.get(email) || { email, name: person.name || "", phone: person.phone || "", events: [] };
+      if (person.name) current.name = person.name;
+      if (person.phone) current.phone = person.phone;
+      const event = eventById(person.eventId);
+      if (event && !current.events.some((item) => item.id === event.id)) {
+        current.events.push({ id: event.id, name: event.name });
+      }
+      byEmail.set(email, current);
+    }
+    for (const profile of state.value.profiles || []) {
+      const email = String(profile.email || "").toLowerCase();
+      if (!email) continue;
+      const current = byEmail.get(email) || { email, name: profile.name || "", phone: profile.phone || "", events: [] };
+      if (!current.name && profile.name) current.name = profile.name;
+      if (!current.phone && profile.phone) current.phone = profile.phone;
+      byEmail.set(email, current);
+    }
+    return [...byEmail.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async function saveUser(email, input) {
+    if (!isSuperadmin()) throw new Error("Only the superadmin can edit users.");
+    const clean = email.trim().toLowerCase();
+    const name = input.name.trim();
+    const phone = String(input.phone || "").trim();
+    if (!name) throw new Error("A user needs a name.");
+    for (const person of state.value.people.filter((item) => item.email.toLowerCase() === clean)) {
+      await put("people", { ...person, name, phone });
+    }
+    for (const profile of (state.value.profiles || []).filter((item) => String(item.email || "").toLowerCase() === clean)) {
+      await put("profiles", { ...profile, name, phone });
+    }
+  }
+
+  async function signInSuperadmin(email, password) {
+    const expected = configuredAdmin();
+    const clean = email.trim().toLowerCase();
+    if (!expected || clean !== expected) {
+      throw new Error("That email is not the superadmin.");
+    }
+    if (mode.value !== "firebase" || !services.value) {
+      throw new Error("Superadmin sign-in needs the shared hub.");
+    }
+    const { createUserWithEmailAndPassword, signInWithEmailAndPassword } = await import("firebase/auth");
+    let cred;
+    try {
+      cred = await createUserWithEmailAndPassword(services.value.auth, clean, password);
+    } catch (cause) {
+      if (cause?.code === "auth/weak-password") {
+        throw new Error("Use a password with at least 6 characters.");
+      }
+      if (cause?.code !== "auth/email-already-in-use") {
+        throw new Error(cause?.message || "Could not sign in as superadmin.");
+      }
+      try {
+        cred = await signInWithEmailAndPassword(services.value.auth, clean, password);
+      } catch {
+        throw new Error("That password does not match the superadmin account.");
+      }
+    }
+    const existing = await loadProfile(cred.user);
+    await saveProfile({
+      name: existing?.name && existing.name !== clean.split("@")[0] ? existing.name : "Superadmin",
+      email: clean,
+      kind: "superadmin",
+      phone: existing?.phone || "",
+    });
+  }
+
+  async function logout() {
+    writeSession(null);
+    if (mode.value === "firebase" && services.value?.auth?.currentUser) {
+      const { signOut } = await import("firebase/auth");
+      await signOut(services.value.auth);
+    }
+    if (import.meta.client) await navigateTo("/");
   }
 
   async function enterAsOrganizer(name, email) {
@@ -404,21 +578,17 @@ export function useHub() {
     return { record: invite, emailed, mailError };
   }
 
-  async function acceptInvite(token, name, phone) {
+  async function acceptInvite(token, name, phone, password) {
     const invite = state.value.invites.find((item) => item.token === token);
     if (!invite) return null;
     const event = eventById(invite.eventId);
     if (!event) return null;
-    if (mode.value === "firebase" && services.value) {
-      const { isSignInWithEmailLink, signInWithEmailLink } = await import("firebase/auth");
-      if (isSignInWithEmailLink(services.value.auth, location.href)) {
-        const email = localStorage.getItem("gathered-hub-email") || invite.email;
-        await signInWithEmailLink(services.value.auth, email, location.href);
-      }
-    }
     const cleanName = name.trim();
     const cleanPhone = String(phone || "").trim();
-    writeSession({ name: cleanName, email: invite.email, kind: "guest" });
+    if (mode.value === "firebase") {
+      await ensureGuestAccount(invite.email, password);
+    }
+    await saveProfile({ name: cleanName, email: invite.email, kind: "guest", phone: cleanPhone });
     let person = state.value.people.find(
       (item) => item.eventId === event.id && item.email === invite.email,
     );
@@ -479,7 +649,14 @@ export function useHub() {
     itemsFor,
     updatesFor,
     isOrganizer,
+    isSuperadmin,
+    allEvents,
+    allUsers,
+    saveUser,
+    logout,
     enterAsOrganizer,
+    signIn,
+    signInSuperadmin,
     createEvent,
     savePerson,
     saveItem,

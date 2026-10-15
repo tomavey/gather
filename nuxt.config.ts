@@ -46,6 +46,7 @@ export default defineNuxtConfig({
       firebaseMessagingSenderId: '',
       firebaseAppId: '',
       firebaseMeasurementId: '',
+      superadminEmail: '',
     },
   },
 })
