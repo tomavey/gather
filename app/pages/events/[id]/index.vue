@@ -28,15 +28,40 @@
       </div>
 
       <div v-if="tab === 'people'" class="list">
-        <article v-for="person in people" :key="person.id" class="card person">
+        <label class="search">
+          Search
+          <input v-model="peopleQuery" type="search" autocomplete="off" placeholder="Name, coming, or where they’re staying" />
+        </label>
+        <p v-if="peopleQuery.trim() && !visiblePeople.length" class="muted">No one matches that search.</p>
+        <div class="row people-sort">
+          <span class="grow"></span>
+          <span class="grow sort-label">
+            Arrive
+            <span class="sort-arrows">
+              <button type="button" aria-label="Sort by arrive, earliest first" :aria-pressed="peopleSort.field === 'arrival' && peopleSort.dir === 'asc'" @click="setPeopleSort('arrival', 'asc')">↑</button>
+              <button type="button" aria-label="Sort by arrive, latest first" :aria-pressed="peopleSort.field === 'arrival' && peopleSort.dir === 'desc'" @click="setPeopleSort('arrival', 'desc')">↓</button>
+            </span>
+          </span>
+          <span class="grow sort-label">
+            Leave
+            <span class="sort-arrows">
+              <button type="button" aria-label="Sort by leave, earliest first" :aria-pressed="peopleSort.field === 'departure' && peopleSort.dir === 'asc'" @click="setPeopleSort('departure', 'asc')">↑</button>
+              <button type="button" aria-label="Sort by leave, latest first" :aria-pressed="peopleSort.field === 'departure' && peopleSort.dir === 'desc'" @click="setPeopleSort('departure', 'desc')">↓</button>
+            </span>
+          </span>
+        </div>
+        <article v-for="person in visiblePeople" :key="person.id" class="card person">
           <form class="form" @submit.prevent="saveStay(person)">
             <div class="when">
               <strong>{{ person.name }}</strong>
-              <span class="muted">{{ person.email }}</span>
+              <div class="contact">
+                <a :href="`mailto:${person.email}`">{{ person.email }}</a>
+                <a v-if="person.phone" :href="telHref(person.phone)">{{ person.phone }}</a>
+              </div>
             </div>
             <div class="row">
               <label class="grow">Coming?
-                <select v-model="person.status" :disabled="!canEdit(person)" @input="markStayDirty(person)">
+                <select :value="person.status" :disabled="!canEdit(person)" @change="onStatus(person, $event)">
                   <option value="coming">Coming</option>
                   <option value="maybe">Maybe</option>
                   <option value="out">Can’t</option>
@@ -120,9 +145,36 @@ const sendingInvite = ref(false);
 const drafts = reactive({});
 const savedStays = reactive({});
 const savingStays = reactive({});
+const peopleQuery = ref("");
+const peopleSort = ref({ field: "", dir: "asc" });
+const statusLabel = { coming: "Coming", maybe: "Maybe", out: "Can’t" };
 
 const event = computed(() => eventById(route.params.id));
 const people = computed(() => (event.value ? peopleFor(event.value.id) : []));
+const visiblePeople = computed(() => {
+  const query = peopleQuery.value.trim().toLowerCase();
+  const matched = query
+    ? people.value.filter((person) => {
+        const status = `${person.status || ""} ${statusLabel[person.status] || ""}`.toLowerCase();
+        return [person.name, status, person.lodging]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+    : people.value;
+  const { field, dir } = peopleSort.value;
+  if (!field) return matched;
+  return [...matched].sort((a, b) => {
+    const left = a[field] || "";
+    const right = b[field] || "";
+    if (!left && !right) return a.name.localeCompare(b.name);
+    if (!left) return 1;
+    if (!right) return -1;
+    const compared = left.localeCompare(right);
+    if (compared === 0) return a.name.localeCompare(b.name);
+    return dir === "asc" ? compared : -compared;
+  });
+});
 const updates = computed(() => (event.value ? updatesFor(event.value.id) : []));
 const organizer = computed(() => isOrganizer(event.value));
 const days = computed(() => (event.value ? eachDay(event.value.start, event.value.end) : []));
@@ -131,6 +183,14 @@ watch(days, (list) => {
     if (!drafts[day]) drafts[day] = { title: "", time: "16:00", place: "" };
   }
 }, { immediate: true });
+
+function telHref(phone) {
+  return `tel:${String(phone).replace(/[^\d+]/g, "")}`;
+}
+
+function setPeopleSort(field, dir) {
+  peopleSort.value = { field, dir };
+}
 
 function canEdit(person) {
   if (!session.value) return false;
@@ -158,6 +218,11 @@ function staySaving(person) {
 
 function markStayDirty(person) {
   savedStays[person.id] = false;
+}
+
+function onStatus(person, event) {
+  person.status = event.target.value;
+  markStayDirty(person);
 }
 
 async function saveStay(person) {

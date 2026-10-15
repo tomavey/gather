@@ -404,7 +404,7 @@ export function useHub() {
     return { record: invite, emailed, mailError };
   }
 
-  async function acceptInvite(token, name) {
+  async function acceptInvite(token, name, phone) {
     const invite = state.value.invites.find((item) => item.token === token);
     if (!invite) return null;
     const event = eventById(invite.eventId);
@@ -416,7 +416,9 @@ export function useHub() {
         await signInWithEmailLink(services.value.auth, email, location.href);
       }
     }
-    writeSession({ name: name.trim(), email: invite.email, kind: "guest" });
+    const cleanName = name.trim();
+    const cleanPhone = String(phone || "").trim();
+    writeSession({ name: cleanName, email: invite.email, kind: "guest" });
     let person = state.value.people.find(
       (item) => item.eventId === event.id && item.email === invite.email,
     );
@@ -424,8 +426,9 @@ export function useHub() {
       person = {
         id: uid(),
         eventId: event.id,
-        name: name.trim(),
+        name: cleanName,
         email: invite.email,
+        phone: cleanPhone,
         status: "coming",
         arrival: event.start,
         departure: event.end,
@@ -434,8 +437,9 @@ export function useHub() {
       await put("people", person);
       const entry = logChange(event.id, `${person.name} joined ${event.name}.`);
       if (mode.value === "firebase") await put("updates", entry);
-    } else if (person.name !== name.trim()) {
-      person.name = name.trim();
+    } else if (person.name !== cleanName || person.phone !== cleanPhone) {
+      person.name = cleanName;
+      person.phone = cleanPhone;
       await put("people", person);
     }
     return event;

@@ -18,6 +18,8 @@
       <form class="card form" style="padding: 18px" @submit.prevent="join">
         <label>Name <input v-model="name" required /></label>
         <label>Email <input :value="invite.email" disabled /></label>
+        <label>Cell phone <input v-model="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="555-555-5555" /></label>
+        <p v-if="phoneError" class="error">{{ phoneError }}</p>
         <p class="muted">We’ll remember you in this browser. You won’t sign in again on this device.</p>
         <button class="btn terra" type="submit">Enter the hub</button>
       </form>
@@ -30,6 +32,8 @@ const route = useRoute();
 const hub = useHub();
 const { ready, state, eventById, acceptInvite, formatDay } = hub;
 const name = ref("");
+const phone = ref("");
+const phoneError = ref("");
 
 const invite = computed(() =>
   state.value.invites.find((item) => item.token === route.params.token),
@@ -37,7 +41,13 @@ const invite = computed(() =>
 const event = computed(() => (invite.value ? eventById(invite.value.eventId) : null));
 
 async function join() {
-  const next = await acceptInvite(route.params.token, name.value);
+  const digits = phone.value.replace(/\D/g, "");
+  if (digits.length < 10 || digits.length > 15) {
+    phoneError.value = "Enter a cell phone number with at least 10 digits.";
+    return;
+  }
+  phoneError.value = "";
+  const next = await acceptInvite(route.params.token, name.value, phone.value.trim());
   if (next) await navigateTo(`/events/${next.id}`);
 }
 </script>
